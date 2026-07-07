@@ -5,49 +5,73 @@
 
 import express from "express";
 import path from "path";
-import fs from "fs";
 import crypto from "crypto";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { env } from "cloudflare:workers";
+import { httpServerHandler } from "cloudflare:node";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3200;
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_FILE = path.join(DATA_DIR, "db.json");
-const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 
-// Ensure data directory, database file, and uploads directory exist
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-if (!fs.existsSync(DB_FILE)) {
-  fs.writeFileSync(DB_FILE, JSON.stringify({ users: [], memos: [] }, null, 2));
-}
+// In-memory cache for DB
+let dbCache: any = null;
+
+// Write queue to guarantee ordered KV write operations
+let writeQueue: Promise<void> = Promise.resolve();
+
+// Middleware to pre-load dbCache from Workers KV before handling routes
+app.use(async (req: any, res: any, next: any) => {
+  if (!dbCache) {
+    try {
+      if (env.NOTEBOOK_WIKI_KV) {
+        const data = await env.NOTEBOOK_WIKI_KV.get("db_json");
+        if (data) {
+          dbCache = JSON.parse(data);
+        } else {
+          dbCache = { users: [], memos: [] };
+          await env.NOTEBOOK_WIKI_KV.put("db_json", JSON.stringify(dbCache));
+        }
+      } else {
+        dbCache = { users: [], memos: [] };
+      }
+    } catch (err) {
+      console.error("Failed to load DB from KV:", err);
+      dbCache = { users: [], memos: [] };
+    }
+  }
+  next();
+});
 
 
 
 // In-memory sessions map: token -> user's decrypted 32-byte master key (Buffer)
 const activeSessions = new Map<string, { userId: string; username: string; masterKey: Buffer }>();
 
-// Read DB helper
+// Read DB helper (returns memory cache synchronously)
 function readDB() {
-  try {
-    const data = fs.readFileSync(DB_FILE, "utf-8");
-    return JSON.parse(data);
-  } catch (err) {
+  if (!dbCache) {
     return { users: [], memos: [] };
   }
+  return dbCache;
 }
 
-// Write DB helper
+// Write DB helper (updates cache and schedules non-blocking KV save)
 function writeDB(data: any) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+  dbCache = data;
+  writeQueue = writeQueue.then(async () => {
+    try {
+      if (env.NOTEBOOK_WIKI_KV) {
+        await env.NOTEBOOK_WIKI_KV.put("db_json", JSON.stringify(data));
+      } else {
+        console.warn("NOTEBOOK_WIKI_KV binding not available during write");
+      }
+    } catch (err) {
+      console.error("Failed to sync DB to KV:", err);
+    }
+  });
 }
 
 // Encryption helpers
@@ -2009,7 +2033,7 @@ app.post("/api/memos/analyze-file", requireAuth, async (req: any, res: any) => {
 });
 
 // 7.10.5. Memo Endpoint: Standard file upload for embedding in memos
-app.post("/api/upload", requireAuth, (req: any, res) => {
+app.post("/api/upload", requireAuth, async (req: any, res) => {
   const { userId, masterKey } = req.session;
   const { fileData, mimeType, fileName } = req.body;
   if (!fileData || !mimeType || !fileName) {
@@ -2027,9 +2051,13 @@ app.post("/api/upload", requireAuth, (req: any, res) => {
     const uuid = crypto.randomUUID();
     const cleanFileName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
     const safeName = `${uuid}-${cleanFileName}`;
-    const filePath = path.join(UPLOADS_DIR, safeName);
     
-    fs.writeFileSync(filePath, encryptedBuffer);
+    if (env.NOTEBOOK_WIKI_KV) {
+      await env.NOTEBOOK_WIKI_KV.put(`upload:${safeName}`, encryptedBuffer.buffer);
+    } else {
+      throw new Error("NOTEBOOK_WIKI_KV binding not available");
+    }
+    
     const fileUrl = `/api/uploads/${safeName}`;
     
     res.json({ success: true, url: fileUrl, fileName, mimeType });
@@ -2061,7 +2089,7 @@ function requireAuthWithQuery(req: any, res: any, next: any) {
 }
 
 // Secure media delivery endpoint: decrypts the file on-the-fly for authenticated sessions
-app.get("/api/uploads/:filename", requireAuthWithQuery, (req: any, res: any) => {
+app.get("/api/uploads/:filename", requireAuthWithQuery, async (req: any, res: any) => {
   const { masterKey } = req.session;
   const filename = req.params.filename;
   
@@ -2069,16 +2097,19 @@ app.get("/api/uploads/:filename", requireAuthWithQuery, (req: any, res: any) => 
     return res.status(400).json({ error: "マスターキーがセッションに存在しません。再ログインしてください。" });
   }
 
-  // Prevent directory traversal
   const safeName = path.basename(filename);
-  const filePath = path.join(UPLOADS_DIR, safeName);
-  
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "File not found" });
-  }
   
   try {
-    const encryptedData = fs.readFileSync(filePath);
+    if (!env.NOTEBOOK_WIKI_KV) {
+      return res.status(500).json({ error: "NOTEBOOK_WIKI_KV binding not available" });
+    }
+    
+    const encryptedDataArrayBuffer = await env.NOTEBOOK_WIKI_KV.get(`upload:${safeName}`, { type: "arrayBuffer" });
+    if (!encryptedDataArrayBuffer) {
+      return res.status(404).json({ error: "File not found" });
+    }
+    
+    const encryptedData = Buffer.from(encryptedDataArrayBuffer);
     const decryptedData = decryptBuffer(encryptedData, masterKey);
     
     const ext = path.extname(safeName).toLowerCase();
@@ -2737,25 +2768,5 @@ app.post("/api/google/drive/save", requireAuth, async (req: any, res) => {
   }
 });
 
-// Start server setup (Vite integration for development and Static files serving for Production)
-async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`LLM Wiki server running on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
+// Export the handler for Cloudflare Workers / Pages Functions
+export default httpServerHandler(app);

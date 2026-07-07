@@ -1,0 +1,8 @@
+name = "notebook-wiki-cf"
+pages_build_output_dir = "./dist"
+compatibility_date = "2025-08-15"
+compatibility_flags = ["nodejs_compat", "enable_nodejs_http_server_modules"]
+
+[[kv_namespaces]]
+binding = "NOTEBOOK_WIKI_KV"
+id = "place_your_kv_namespace_id_here"
