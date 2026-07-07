@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLM Wiki</title>
+    <script>
+      // Safeguard for environment/extension issues with chrome.runtime.getManifest
+      (function() {
+        try {
+          if (typeof window !== 'undefined') {
+            var currentChrome = window.chrome;
+            if (!currentChrome) {
+              currentChrome = {};
+              try {
+                window.chrome = currentChrome;
+              } catch (e) {
+                Object.defineProperty(window, 'chrome', {
+                  value: currentChrome,
+                  writable: true,
+                  configurable: true
+                });
+              }
+            }
+            if (!currentChrome.runtime) {
+              currentChrome.runtime = {};
+            }
+            if (typeof currentChrome.runtime.getManifest !== 'function') {
+              currentChrome.runtime.getManifest = function() {
+                return { version: "1.0.0" };
+              };
+            }
+          }
+        } catch (e) {
+          console.warn("Safeguard setup failed", e);
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

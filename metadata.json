@@ -1,0 +1,6 @@
+{
+  "name": "LLM Wiki",
+  "description": "Google Authenticator-like TOTP multi-user secure workspace, client-server AES note encryption, Markdown support, automated Gemini-based tag/backlink node graphs, and external API ingress registration.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
