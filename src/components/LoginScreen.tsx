@@ -160,7 +160,7 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-indigo-50 border border-indigo-150 text-indigo-600 mb-3 mt-2">
             <Lock className="w-6 h-6" />
           </div>
-          <h1 className="text-2xl font-display font-semibold tracking-tight text-slate-950">LLM Wiki</h1>
+          <h1 className="text-2xl font-display font-semibold tracking-tight text-slate-950">Notebook Wiki</h1>
           <p className="text-xs text-slate-400 mt-1 font-mono">End-to-End Encrypted Personal Knowledge Base</p>
         </div>
 

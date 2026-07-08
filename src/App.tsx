@@ -1199,10 +1199,10 @@ export default function App() {
 
           <div className="hidden sm:flex items-center gap-2 md:gap-3">
             <div className={`w-8 h-8 rounded flex items-center justify-center text-white font-bold shadow-sm ${activeTheme.accentBg}`}>
-              <span className="text-xs">LW</span>
+              <span className="text-xs">NW</span>
             </div>
             <div>
-              <span className={`font-display font-semibold text-base tracking-tight ${activeTheme.textMain}`}>LLM Wiki</span>
+              <span className={`font-display font-semibold text-base tracking-tight ${activeTheme.textMain}`}>Notebook Wiki</span>
               <span className={`text-[10px] font-mono ml-2 border rounded px-1.5 py-0.5 ${activeTheme.accentText} ${activeTheme.accentBorder} ${activeTheme.accentLight}`}>
                 TOTP Secure
               </span>

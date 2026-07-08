@@ -56,7 +56,7 @@ export function AiSearchChat({ memos, activeTheme, token, onSelectMemo, setActiv
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      content: `こんにちは！LLM Wiki AIアシスタントです。
+      content: `こんにちは！Notebook Wiki AIアシスタントです。
 
 メモの検索だけでなく、新しいメモの作成や既存のメモの編集（追加や更新）を私に指示することができます！
 「〜について新しいメモを作って」「〜というメモに〇〇を追記して」のように指示してみてください。`,
@@ -98,7 +98,7 @@ export function AiSearchChat({ memos, activeTheme, token, onSelectMemo, setActiv
     setMessages([
       {
         role: "assistant",
-        content: `こんにちは！LLM Wiki AIアシスタントです。
+        content: `こんにちは！Notebook Wiki AIアシスタントです。
 
 メモの検索だけでなく、新しいメモの作成や既存のメモの編集（追加や更新）を私に指示することができます！
 「〜について新しいメモを作って」「〜というメモに〇〇を追記して」のように指示してみてください。`,

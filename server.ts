@@ -22,26 +22,37 @@ let dbCache: any = null;
 // Write queue to guarantee ordered KV write operations
 let writeQueue: Promise<void> = Promise.resolve();
 
-// Middleware to pre-load dbCache from Workers KV before handling routes
+// Middleware to pre-load dbCache from Workers R2 before handling routes
 app.use(async (req: any, res: any, next: any) => {
-  if (!dbCache) {
-    try {
-      if (env.NOTEBOOK_WIKI_KV) {
-        const data = await env.NOTEBOOK_WIKI_KV.get("db_json");
-        if (data) {
-          dbCache = JSON.parse(data);
-        } else {
-          dbCache = { users: [], memos: [] };
-          await env.NOTEBOOK_WIKI_KV.put("db_json", JSON.stringify(dbCache));
-        }
+  try {
+    if (env.NOTEBOOK_WIKI_R2) {
+      const obj = await env.NOTEBOOK_WIKI_R2.get("db.json");
+      if (obj) {
+        const text = await obj.text();
+        dbCache = JSON.parse(text);
       } else {
         dbCache = { users: [], memos: [] };
+        await env.NOTEBOOK_WIKI_R2.put("db.json", JSON.stringify(dbCache));
       }
-    } catch (err) {
-      console.error("Failed to load DB from KV:", err);
+    } else {
       dbCache = { users: [], memos: [] };
     }
+  } catch (err) {
+    console.error("Failed to load DB from R2:", err);
+    dbCache = { users: [], memos: [] };
   }
+
+  // Intercept response to guarantee that any pending R2 write finishes before the response is sent back.
+  const originalSend = res.send;
+  res.send = function (body: any) {
+    writeQueue.then(() => {
+      originalSend.call(res, body);
+    }).catch((err) => {
+      console.error("Error during response flush waiting for R2 write:", err);
+      originalSend.call(res, body);
+    });
+  };
+
   next();
 });
 
@@ -58,18 +69,18 @@ function readDB() {
   return dbCache;
 }
 
-// Write DB helper (updates cache and schedules non-blocking KV save)
+// Write DB helper (updates cache and schedules non-blocking R2 save)
 function writeDB(data: any) {
   dbCache = data;
   writeQueue = writeQueue.then(async () => {
     try {
-      if (env.NOTEBOOK_WIKI_KV) {
-        await env.NOTEBOOK_WIKI_KV.put("db_json", JSON.stringify(data));
+      if (env.NOTEBOOK_WIKI_R2) {
+        await env.NOTEBOOK_WIKI_R2.put("db.json", JSON.stringify(data));
       } else {
-        console.warn("NOTEBOOK_WIKI_KV binding not available during write");
+        console.warn("NOTEBOOK_WIKI_R2 binding not available during write");
       }
     } catch (err) {
-      console.error("Failed to sync DB to KV:", err);
+      console.error("Failed to sync DB to R2:", err);
     }
   });
 }
@@ -2052,10 +2063,10 @@ app.post("/api/upload", requireAuth, async (req: any, res) => {
     const cleanFileName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
     const safeName = `${uuid}-${cleanFileName}`;
     
-    if (env.NOTEBOOK_WIKI_KV) {
-      await env.NOTEBOOK_WIKI_KV.put(`upload:${safeName}`, encryptedBuffer.buffer);
+    if (env.NOTEBOOK_WIKI_R2) {
+      await env.NOTEBOOK_WIKI_R2.put(`uploads/${safeName}`, encryptedBuffer.buffer);
     } else {
-      throw new Error("NOTEBOOK_WIKI_KV binding not available");
+      throw new Error("NOTEBOOK_WIKI_R2 binding not available");
     }
     
     const fileUrl = `/api/uploads/${safeName}`;
@@ -2100,14 +2111,16 @@ app.get("/api/uploads/:filename", requireAuthWithQuery, async (req: any, res: an
   const safeName = path.basename(filename);
   
   try {
-    if (!env.NOTEBOOK_WIKI_KV) {
-      return res.status(500).json({ error: "NOTEBOOK_WIKI_KV binding not available" });
+    if (!env.NOTEBOOK_WIKI_R2) {
+      return res.status(500).json({ error: "NOTEBOOK_WIKI_R2 binding not available" });
     }
     
-    const encryptedDataArrayBuffer = await env.NOTEBOOK_WIKI_KV.get(`upload:${safeName}`, { type: "arrayBuffer" });
-    if (!encryptedDataArrayBuffer) {
+    const obj = await env.NOTEBOOK_WIKI_R2.get(`uploads/${safeName}`);
+    if (!obj) {
       return res.status(404).json({ error: "File not found" });
     }
+    
+    const encryptedDataArrayBuffer = await obj.arrayBuffer();
     
     const encryptedData = Buffer.from(encryptedDataArrayBuffer);
     const decryptedData = decryptBuffer(encryptedData, masterKey);
@@ -2768,5 +2781,18 @@ app.post("/api/google/drive/save", requireAuth, async (req: any, res) => {
   }
 });
 
-// Export the handler for Cloudflare Workers / Pages Functions
-export default httpServerHandler(app);
+const server = app.listen(PORT, "127.0.0.1", () => {
+  console.log(`LLM Wiki server running internally on http://localhost:${PORT}`);
+});
+
+const handler = httpServerHandler(server);
+
+export default {
+  async fetch(request: any, env: any, ctx: any) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/api")) {
+      return handler.fetch(request, env, ctx);
+    }
+    return env.ASSETS.fetch(request);
+  }
+};
